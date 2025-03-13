@@ -164,7 +164,7 @@ def question_callback_handler(update: Update, context: CallbackContext) -> int:
             
             try:
                 response = openai.ChatCompletion.create(
-                    model="gpt-4",
+                    model="gpt-4o-mini",
                     messages=[
                         {"role": "system", "content": "Ты помогаешь составить отзыв для клиники."},
                         {"role": "user", "content": prompt},
