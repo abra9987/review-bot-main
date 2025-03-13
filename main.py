@@ -28,16 +28,17 @@ START_MENU, QUESTION, CONFIRM_REVIEW, EDIT_REVIEW_STATE = range(4)
 # Настройка OpenAI API
 openai.api_key = OPENAI_API_KEY
 
+# Настройка логирования
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
 )
 logger = logging.getLogger(__name__)
 
-# --- Стартовое меню ---
+# --- Функция стартового меню ---
 def start(update: Update, context: CallbackContext) -> int:
     user_id = update.effective_user.id
     
-    # Проверяем, авторизован ли пользователь
+    # Проверяем авторизацию пользователя
     business_type = check_user(user_id)
     
     if not business_type:
@@ -47,28 +48,23 @@ def start(update: Update, context: CallbackContext) -> int:
             update.callback_query.message.reply_text("Вы не авторизованы. Обратитесь к администратору.")
         return ConversationHandler.END
     
-    # Сохраняем бизнес-тип в контексте
+    # Сохраняем данные в контексте
     context.user_data["business_type"] = business_type
+    context.user_data["questions"] = get_questions(business_type)
     
-    # Загружаем вопросы для этого бизнес-типа
-    questions = get_questions(business_type)
-    
-    if not questions:
+    if not context.user_data["questions"]:
         if update.message:
-            update.message.reply_text(f"Ошибка: вопросы для типа бизнеса '{business_type}' не найдены. Обратитесь к администратору.")
+            update.message.reply_text(f"Ошибка: вопросы для типа бизнеса '{business_type}' не найдены.")
         else:
-            update.callback_query.message.reply_text(f"Ошибка: вопросы для типа бизнеса '{business_type}' не найдены. Обратитесь к администратору.")
+            update.callback_query.message.reply_text(f"Ошибка: вопросы для типа бизнеса '{business_type}' не найдены.")
         return ConversationHandler.END
     
-    # Сохраняем вопросы в контексте
-    context.user_data["questions"] = questions
-    
+    # Формируем клавиатуру стартового меню
     keyboard = [
         [InlineKeyboardButton("✅ Начать анкетирование", callback_data="start_survey")],
         [InlineKeyboardButton("❌ Отмена", callback_data="cancel")],
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
-    
     message_text = "📌 Выберите действие:"
     
     if update.message:
@@ -78,6 +74,7 @@ def start(update: Update, context: CallbackContext) -> int:
     
     return START_MENU
 
+# --- Обработчик стартового меню ---
 def start_menu_handler(update: Update, context: CallbackContext) -> int:
     query = update.callback_query
     query.answer()
@@ -85,10 +82,9 @@ def start_menu_handler(update: Update, context: CallbackContext) -> int:
     if query.data == "start_survey":
         context.user_data["current_question"] = 0
         context.user_data["answers"] = []
-        
         questions = context.user_data.get("questions", [])
         if not questions:
-            query.edit_message_text(text="Ошибка: вопросы не найдены. Обратитесь к администратору.")
+            query.edit_message_text(text="Ошибка: вопросы не найдены.")
             return ConversationHandler.END
         
         question_text = f"📝 Вопрос 1/{len(questions)}:\n{questions[0]}"
@@ -99,7 +95,7 @@ def start_menu_handler(update: Update, context: CallbackContext) -> int:
         query.edit_message_text(text="Анкетирование отменено.")
         return ConversationHandler.END
 
-# --- Этап вопросов ---
+# --- Обработчик ответов на вопросы ---
 def answer_handler(update: Update, context: CallbackContext) -> int:
     current_q = context.user_data.get("current_question", 0)
     answer = update.message.text
@@ -112,17 +108,19 @@ def answer_handler(update: Update, context: CallbackContext) -> int:
     
     context.user_data["answers"] = answers
 
-    # Подтверждаем ответ с кнопками "Изменить ответ" и "Далее"
+    # Клавиатура с кнопками, включая "Обратно в меню"
     keyboard = [
         [
             InlineKeyboardButton("🔄 Изменить ответ", callback_data="edit_answer"),
             InlineKeyboardButton("⏭ Далее", callback_data="next_question"),
-        ]
+        ],
+        [InlineKeyboardButton("🏠 Обратно в меню", callback_data="back_to_menu")],
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     update.message.reply_text(f"Ответ: \"{answer}\"\nВыберите действие:", reply_markup=reply_markup)
     return QUESTION
 
+# --- Обработчик callback-запросов на этапе вопросов ---
 def question_callback_handler(update: Update, context: CallbackContext) -> int:
     query = update.callback_query
     query.answer()
@@ -132,7 +130,7 @@ def question_callback_handler(update: Update, context: CallbackContext) -> int:
     
     if query.data == "edit_answer":
         query.edit_message_text(
-            text=f"📝 Вопрос {current_q+1}/{len(questions)}:\n{questions[current_q]}\nПожалуйста, введите новый ответ:"
+            text=f"📝 Вопрос {current_q+1}/{len(questions)}:\n{questions[current_q]}\nВведите новый ответ:"
         )
         return QUESTION
     
@@ -145,22 +143,14 @@ def question_callback_handler(update: Update, context: CallbackContext) -> int:
             query.edit_message_text(text=question_text)
             return QUESTION
         else:
-            # Формируем промпт для генерации отзыва
+            # Генерация отзыва
             answers = context.user_data.get("answers", [])
             business_type = context.user_data.get("business_type")
-            
-            # Получаем шаблон промпта для этого бизнес-типа
             prompt_template = get_prompt(business_type)
-            
-            # Формируем список ответов для вставки в промпт
-            answers_text = ""
-            for i, ans in enumerate(answers):
-                answers_text += f"{i+1}. {ans}\n"
-            
-            # Подставляем ответы в шаблон промпта
+            answers_text = "\n".join(f"{i+1}. {ans}" for i, ans in enumerate(answers))
             prompt = prompt_template.format(answers_text)
             
-            query.edit_message_text(text="Формирую отзыв, пожалуйста, подождите...")
+            query.edit_message_text(text="Формирую отзыв, подождите...")
             
             try:
                 response = openai.ChatCompletion.create(
@@ -174,13 +164,12 @@ def question_callback_handler(update: Update, context: CallbackContext) -> int:
                 )
                 generated_review = response.choices[0].message.content.strip()
             except Exception as e:
-                logger.error(f"Ошибка при вызове OpenAI API: {e}")
-                query.edit_message_text(text="Произошла ошибка при генерации отзыва. Попробуйте позже.")
+                logger.error(f"Ошибка OpenAI API: {e}")
+                query.edit_message_text(text="Ошибка при генерации отзыва.")
                 return ConversationHandler.END
 
             context.user_data["generated_review"] = generated_review
             
-            # Выводим сгенерированный отзыв с набором из трёх кнопок
             keyboard = [
                 [
                     InlineKeyboardButton("✏️ Отредактировать отзыв", callback_data="edit_review"),
@@ -189,24 +178,35 @@ def question_callback_handler(update: Update, context: CallbackContext) -> int:
                 ]
             ]
             reply_markup = InlineKeyboardMarkup(keyboard)
-            review_text = f"🎉 Отзыв сформирован:\n\"{generated_review}\""
-            query.edit_message_text(text=review_text, reply_markup=reply_markup)
+            query.edit_message_text(
+                text=f"🎉 Отзыв сформирован:\n\"{generated_review}\"", reply_markup=reply_markup
+            )
             return CONFIRM_REVIEW
-    else:
-        query.edit_message_text(text="Неизвестная команда, завершаем диалог.")
-        return ConversationHandler.END
+    
+    elif query.data == "back_to_menu":
+        # Сброс данных и возврат в меню
+        context.user_data.clear()
+        context.user_data["business_type"] = check_user(update.effective_user.id)
+        context.user_data["questions"] = get_questions(context.user_data["business_type"])
+        
+        keyboard = [
+            [InlineKeyboardButton("✅ Начать анкетирование", callback_data="start_survey")],
+            [InlineKeyboardButton("❌ Отмена", callback_data="cancel")],
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        query.edit_message_text(text="📌 Выберите действие:", reply_markup=reply_markup)
+        return START_MENU
 
-# --- Этап подтверждения отзыва ---
+# --- Обработчик подтверждения отзыва ---
 def review_callback_handler(update: Update, context: CallbackContext) -> int:
     query = update.callback_query
     query.answer()
     
     if query.data == "edit_review":
-        # Предлагаем ввести отредактированный отзыв с кнопкой "Назад"
         keyboard = [[InlineKeyboardButton("Назад", callback_data="cancel_edit")]]
         reply_markup = InlineKeyboardMarkup(keyboard)
         query.edit_message_text(
-            text="Пожалуйста, введите отредактированный вариант отзыва или нажмите 'Назад', чтобы отменить редактирование:",
+            text="Введите отредактированный отзыв или нажмите 'Назад':",
             reply_markup=reply_markup,
         )
         return EDIT_REVIEW_STATE
@@ -226,8 +226,7 @@ def review_callback_handler(update: Update, context: CallbackContext) -> int:
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
         query.edit_message_text(
-            text="Отправьте отзыв через WhatsApp или выберите другое действие:",
-            reply_markup=reply_markup,
+            text="Отправьте отзыв через WhatsApp:", reply_markup=reply_markup
         )
         return CONFIRM_REVIEW
     
@@ -247,10 +246,8 @@ def review_callback_handler(update: Update, context: CallbackContext) -> int:
         return CONFIRM_REVIEW
     
     elif query.data == "restart":
-        # Начинаем заново, сохраняя business_type и questions
         business_type = context.user_data.get("business_type")
         questions = context.user_data.get("questions", [])
-        
         context.user_data.clear()
         context.user_data["business_type"] = business_type
         context.user_data["questions"] = questions
@@ -262,11 +259,8 @@ def review_callback_handler(update: Update, context: CallbackContext) -> int:
         reply_markup = InlineKeyboardMarkup(keyboard)
         query.edit_message_text(text="📌 Выберите действие:", reply_markup=reply_markup)
         return START_MENU
-    
-    else:
-        query.edit_message_text(text="Неизвестная команда, завершаем диалог.")
-        return ConversationHandler.END
 
+# --- Обработчик редактирования отзыва ---
 def edit_review_handler(update: Update, context: CallbackContext) -> int:
     edited_review = update.message.text
     context.user_data["generated_review"] = edited_review
@@ -279,7 +273,6 @@ def edit_review_handler(update: Update, context: CallbackContext) -> int:
         ]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
-    
     update.message.reply_text(
         f"Ваш отредактированный отзыв:\n\"{edited_review}\"\nВыберите действие:", reply_markup=reply_markup
     )
@@ -298,20 +291,19 @@ def cancel_edit_handler(update: Update, context: CallbackContext) -> int:
         ]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
-    
     query.edit_message_text(
         text=f"Отзыв сохранён:\n\"{generated_review}\"", reply_markup=reply_markup
     )
     return CONFIRM_REVIEW
 
+# --- Отмена диалога ---
 def cancel(update: Update, context: CallbackContext) -> int:
     update.message.reply_text("Диалог отменен.")
     return ConversationHandler.END
 
+# --- Главная функция ---
 def main():
-    # Создаем таблицы в базе данных, если они не существуют
     create_tables()
-    
     updater = Updater(TELEGRAM_TOKEN, use_context=True)
     dp = updater.dispatcher
 
@@ -321,7 +313,7 @@ def main():
             START_MENU: [CallbackQueryHandler(start_menu_handler, pattern="^(start_survey|cancel)$")],
             QUESTION: [
                 MessageHandler(Filters.text & ~Filters.command, answer_handler),
-                CallbackQueryHandler(question_callback_handler, pattern="^(edit_answer|next_question)$"),
+                CallbackQueryHandler(question_callback_handler, pattern="^(edit_answer|next_question|back_to_menu)$"),
             ],
             CONFIRM_REVIEW: [
                 CallbackQueryHandler(
