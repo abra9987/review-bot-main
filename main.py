@@ -2,6 +2,7 @@ import logging
 import urllib.parse
 import os
 import openai
+import random
 from dotenv import load_dotenv
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
@@ -23,7 +24,7 @@ TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
 # Определяем состояния диалога
-START_MENU, QUESTION, CONFIRM_REVIEW, EDIT_REVIEW_STATE, HUMANIZE_PROCESSING = range(5)
+START_MENU, QUESTION, CONFIRM_REVIEW, EDIT_REVIEW_STATE, HUMANIZE_PROCESSING, DEMOGRAPHIC_CHOICE = range(6)
 
 # Настройка OpenAI API
 openai.api_key = OPENAI_API_KEY
@@ -33,6 +34,40 @@ logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
 )
 logger = logging.getLogger(__name__)
+
+# Словарь профилей для персонализации
+demographic_profiles = {
+    "young_male": {
+        "name": "молодого человека (18-30 лет)",
+        "style": "современный, энергичный, использует молодежный сленг и короткие предложения",
+        "characteristics": "ценит скорость, технологичность, прямолинейность, не любит ждать"
+    },
+    "young_female": {
+        "name": "молодой женщины (18-30 лет)",
+        "style": "эмоциональный, использует эмодзи, позитивный, детальный",
+        "characteristics": "внимательна к деталям, ценит атмосферу и отношение персонала"
+    },
+    "middle_male": {
+        "name": "мужчины средних лет",
+        "style": "сдержанный, конкретный, деловой, оценивает соотношение цена/качество",
+        "characteristics": "ценит профессионализм, четкость, пунктуальность, результат"
+    },
+    "woman_children": {
+        "name": "женщины с детьми",
+        "style": "заботливый, ориентированный на безопасность и комфорт, упоминает детей",
+        "characteristics": "важны безопасность, внимание к детям, терпеливость персонала, удобство"
+    },
+    "elderly": {
+        "name": "пожилого человека",
+        "style": "вежливый, традиционный, размеренный, возможно с советскими речевыми оборотами",
+        "characteristics": "ценит внимание, уважение, понятные объяснения, не торопливое обслуживание"
+    },
+    "random": {
+        "name": "случайного клиента",
+        "style": "естественный и повседневный",
+        "characteristics": "обычный клиент со своими впечатлениями"
+    }
+}
 
 # --- Функция стартового меню ---
 def start(update: Update, context: CallbackContext) -> int:
@@ -154,7 +189,7 @@ def question_callback_handler(update: Update, context: CallbackContext) -> int:
             
             try:
                 response = openai.ChatCompletion.create(
-                    model="gpt-4o-mini",
+                    model="gpt-4o",
                     messages=[
                         {"role": "system", "content": "Ты помогаешь составить отзыв для клиники."},
                         {"role": "user", "content": prompt},
@@ -173,7 +208,7 @@ def question_callback_handler(update: Update, context: CallbackContext) -> int:
             keyboard = [
                 [
                     InlineKeyboardButton("✏️ Отредактировать отзыв", callback_data="edit_review"),
-                    InlineKeyboardButton("👤 Очеловечить", callback_data="humanize_review"),
+                    InlineKeyboardButton("👤 Персонализировать", callback_data="personalize_review"),
                     InlineKeyboardButton("✅ Отправить в WhatsApp", callback_data="send_whatsapp"),
                 ],
                 [InlineKeyboardButton("🔄 Начать заново", callback_data="restart")],
@@ -236,7 +271,7 @@ def review_callback_handler(update: Update, context: CallbackContext) -> int:
         keyboard = [
             [
                 InlineKeyboardButton("✏️ Отредактировать отзыв", callback_data="edit_review"),
-                InlineKeyboardButton("👤 Очеловечить", callback_data="humanize_review"),
+                InlineKeyboardButton("👤 Персонализировать", callback_data="personalize_review"),
                 InlineKeyboardButton("✅ Отправить в WhatsApp", callback_data="send_whatsapp"),
             ],
             [InlineKeyboardButton("🔄 Начать заново", callback_data="restart")],
@@ -262,6 +297,156 @@ def review_callback_handler(update: Update, context: CallbackContext) -> int:
         query.edit_message_text(text="📌 Выберите действие:", reply_markup=reply_markup)
         return START_MENU
 
+# --- Обработчик выбора демографии ---
+def personalize_review_handler(update: Update, context: CallbackContext) -> int:
+    query = update.callback_query
+    query.answer()
+    
+    # Сохраняем текущий отзыв
+    review = context.user_data.get("generated_review", "")
+    context.user_data["original_review"] = review
+    
+    # Создаем клавиатуру с демографическими опциями
+    keyboard = [
+        [
+            InlineKeyboardButton("👨 Молодой человек (18-30)", callback_data="demo_young_male"),
+            InlineKeyboardButton("👩 Молодая женщина (18-30)", callback_data="demo_young_female"),
+        ],
+        [
+            InlineKeyboardButton("👨‍💼 Мужчина средних лет", callback_data="demo_middle_male"),
+            InlineKeyboardButton("👩‍👧 Женщина с детьми", callback_data="demo_woman_children"),
+        ],
+        [
+            InlineKeyboardButton("👴 Пожилой человек", callback_data="demo_elderly"),
+            InlineKeyboardButton("🎲 Случайный", callback_data="demo_random"),
+        ],
+        [InlineKeyboardButton("◀️ Назад", callback_data="back_to_review")],
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    query.edit_message_text(
+        text=f"👤 Выберите тип клиента для персонализации отзыва:\n\n"
+             f"Текущий отзыв:\n\"{review}\"",
+        reply_markup=reply_markup
+    )
+    return DEMOGRAPHIC_CHOICE
+
+# --- Обработчик возврата к экрану отзыва ---
+def back_to_review_handler(update: Update, context: CallbackContext) -> int:
+    query = update.callback_query
+    query.answer()
+    
+    review = context.user_data.get("generated_review", "")
+    
+    keyboard = [
+        [
+            InlineKeyboardButton("✏️ Отредактировать отзыв", callback_data="edit_review"),
+            InlineKeyboardButton("👤 Персонализировать", callback_data="personalize_review"),
+            InlineKeyboardButton("✅ Отправить в WhatsApp", callback_data="send_whatsapp"),
+        ],
+        [InlineKeyboardButton("🔄 Начать заново", callback_data="restart")],
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    query.edit_message_text(
+        text=f"🎉 Отзыв сформирован:\n\"{review}\"",
+        reply_markup=reply_markup
+    )
+    return CONFIRM_REVIEW
+
+# --- Обработчик выбора демографии ---
+def demographic_choice_handler(update: Update, context: CallbackContext) -> int:
+    query = update.callback_query
+    query.answer()
+    
+    demographic_type = query.data.replace("demo_", "")
+    review = context.user_data.get("original_review", "")
+    
+    query.edit_message_text(text="Персонализирую отзыв, подождите...")
+    
+    if demographic_type == "random":
+        # Выбираем случайный профиль, кроме "random"
+        demographic_type = random.choice([k for k in demographic_profiles.keys() if k != "random"])
+    
+    profile = demographic_profiles.get(demographic_type)
+    
+    # Промпт для персонализации отзыва
+    personalize_prompt = f"""
+    Перепиши этот отзыв так, чтобы он звучал как отзыв от {profile["name"]}.
+    
+    Стиль написания: {profile["style"]}
+    Клиент ценит: {profile["characteristics"]}
+    
+    Правила:
+    1. Отзыв должен быть ОЧЕНЬ коротким (2-4 предложения максимум)
+    2. Используй речевые обороты, характерные для данной демографической группы
+    3. Избегай слишком формального языка
+    4. Сохрани основные положительные моменты из исходного отзыва
+    5. Добавь 1-2 специфических детали, характерных для этой группы клиентов
+    
+    Вот исходный отзыв:
+    "{review}"
+    
+    Создай короткую, персонализированную версию отзыва.
+    """
+    
+    try:
+        response = openai.ChatCompletion.create(
+            model="gpt-4o",
+            messages=[
+                {"role": "system", "content": f"Ты эксперт по созданию реалистичных отзывов от лица разных типов клиентов."},
+                {"role": "user", "content": personalize_prompt},
+            ],
+            temperature=0.85,
+            max_tokens=200,
+        )
+        personalized_review = response.choices[0].message.content.strip()
+        context.user_data["generated_review"] = personalized_review
+        
+        # Клавиатура без кнопки "Персонализировать"
+        keyboard = [
+            [
+                InlineKeyboardButton("✏️ Отредактировать отзыв", callback_data="edit_review"),
+                InlineKeyboardButton("✅ Отправить в WhatsApp", callback_data="send_whatsapp"),
+            ],
+            [InlineKeyboardButton("🔄 Начать заново", callback_data="restart")],
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        profile_name = demographic_profiles.get(demographic_type)["name"]
+        query.edit_message_text(
+            text=f"🎭 Отзыв персонализирован (стиль {profile_name}):\n\n\"{personalized_review}\"",
+            reply_markup=reply_markup
+        )
+        return CONFIRM_REVIEW
+    except Exception as e:
+        logger.error(f"Ошибка OpenAI API при персонализации: {e}")
+        
+        # В случае ошибки возвращаем к выбору демографии
+        keyboard = [
+            [
+                InlineKeyboardButton("👨 Молодой человек (18-30)", callback_data="demo_young_male"),
+                InlineKeyboardButton("👩 Молодая женщина (18-30)", callback_data="demo_young_female"),
+            ],
+            [
+                InlineKeyboardButton("👨‍💼 Мужчина средних лет", callback_data="demo_middle_male"),
+                InlineKeyboardButton("👩‍👧 Женщина с детьми", callback_data="demo_woman_children"),
+            ],
+            [
+                InlineKeyboardButton("👴 Пожилой человек", callback_data="demo_elderly"),
+                InlineKeyboardButton("🎲 Случайный", callback_data="demo_random"),
+            ],
+            [InlineKeyboardButton("◀️ Назад", callback_data="back_to_review")],
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        query.edit_message_text(
+            text=f"❌ Ошибка при персонализации отзыва. Попробуйте еще раз.\n\n"
+                 f"Текущий отзыв:\n\"{review}\"",
+            reply_markup=reply_markup
+        )
+        return DEMOGRAPHIC_CHOICE
+
 # --- Обработчик очеловечивания отзыва ---
 def humanize_review_handler(update: Update, context: CallbackContext) -> int:
     query = update.callback_query
@@ -271,7 +456,7 @@ def humanize_review_handler(update: Update, context: CallbackContext) -> int:
     
     query.edit_message_text(text="Очеловечиваю отзыв, подождите...")
     
-    # Промпт для "очеловечивания" отзыва
+    # Обновленный промпт для "очеловечивания" отзыва
     humanize_prompt = """
     Ты эксперт по созданию коротких, естественных отзывов клиентов. 
     Твоя задача — переписать предоставленный отзыв так, чтобы он был:
@@ -303,11 +488,11 @@ def humanize_review_handler(update: Update, context: CallbackContext) -> int:
         response = openai.ChatCompletion.create(
             model="gpt-4o",
             messages=[
-                {"role": "system", "content": "Ты помогаешь сделать отзыв клиента более естественным и человечным."},
+                {"role": "system", "content": "Ты помогаешь сделать отзыв клиента более коротким, естественным и человечным."},
                 {"role": "user", "content": humanize_prompt.format(review=review)},
             ],
             temperature=0.8,
-            max_tokens=300,
+            max_tokens=200,
         )
         humanized_review = response.choices[0].message.content.strip()
         context.user_data["generated_review"] = humanized_review
@@ -332,7 +517,7 @@ def humanize_review_handler(update: Update, context: CallbackContext) -> int:
         keyboard = [
             [
                 InlineKeyboardButton("✏️ Отредактировать отзыв", callback_data="edit_review"),
-                InlineKeyboardButton("👤 Очеловечить", callback_data="humanize_review"),
+                InlineKeyboardButton("👤 Персонализировать", callback_data="personalize_review"),
                 InlineKeyboardButton("✅ Отправить в WhatsApp", callback_data="send_whatsapp"),
             ],
             [InlineKeyboardButton("🔄 Начать заново", callback_data="restart")],
@@ -352,7 +537,7 @@ def edit_review_handler(update: Update, context: CallbackContext) -> int:
     keyboard = [
         [
             InlineKeyboardButton("✏️ Отредактировать отзыв", callback_data="edit_review"),
-            InlineKeyboardButton("👤 Очеловечить", callback_data="humanize_review"),
+            InlineKeyboardButton("👤 Персонализировать", callback_data="personalize_review"),
             InlineKeyboardButton("✅ Отправить в WhatsApp", callback_data="send_whatsapp"),
         ],
         [InlineKeyboardButton("🔄 Начать заново", callback_data="restart")],
@@ -371,7 +556,7 @@ def cancel_edit_handler(update: Update, context: CallbackContext) -> int:
     keyboard = [
         [
             InlineKeyboardButton("✏️ Отредактировать отзыв", callback_data="edit_review"),
-            InlineKeyboardButton("👤 Очеловечить", callback_data="humanize_review"),
+            InlineKeyboardButton("👤 Персонализировать", callback_data="personalize_review"),
             InlineKeyboardButton("✅ Отправить в WhatsApp", callback_data="send_whatsapp"),
         ],
         [InlineKeyboardButton("🔄 Начать заново", callback_data="restart")],
@@ -407,6 +592,10 @@ def main():
                     pattern="^(edit_review|send_whatsapp|back_from_whatsapp|restart)$"
                 ),
                 CallbackQueryHandler(
+                    personalize_review_handler, 
+                    pattern="^personalize_review$"
+                ),
+                CallbackQueryHandler(
                     humanize_review_handler, 
                     pattern="^humanize_review$"
                 ),
@@ -414,6 +603,10 @@ def main():
             EDIT_REVIEW_STATE: [
                 CallbackQueryHandler(cancel_edit_handler, pattern="^cancel_edit$"),
                 MessageHandler(Filters.text & ~Filters.command, edit_review_handler),
+            ],
+            DEMOGRAPHIC_CHOICE: [
+                CallbackQueryHandler(demographic_choice_handler, pattern="^demo_"),
+                CallbackQueryHandler(back_to_review_handler, pattern="^back_to_review$"),
             ],
         },
         fallbacks=[CommandHandler("cancel", cancel)],
