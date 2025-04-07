@@ -189,7 +189,7 @@ def question_callback_handler(update: Update, context: CallbackContext) -> int:
             
             try:
                 response = openai.ChatCompletion.create(
-                    model="gpt-4o",
+                    model="gpt-4o-mini",
                     messages=[
                         {"role": "system", "content": "Ты помогаешь составить отзыв для клиники."},
                         {"role": "user", "content": prompt},
@@ -204,6 +204,7 @@ def question_callback_handler(update: Update, context: CallbackContext) -> int:
                 return ConversationHandler.END
 
             context.user_data["generated_review"] = generated_review
+            context.user_data["original_review"] = generated_review
             
             keyboard = [
                 [
@@ -354,6 +355,34 @@ def back_to_review_handler(update: Update, context: CallbackContext) -> int:
     )
     return CONFIRM_REVIEW
 
+# --- Обработчик восстановления исходного отзыва ---
+def restore_original_review_handler(update: Update, context: CallbackContext) -> int:
+    query = update.callback_query
+    query.answer()
+    
+    # Получаем исходный отзыв
+    original_review = context.user_data.get("original_review", "")
+    
+    # Восстанавливаем исходный отзыв
+    context.user_data["generated_review"] = original_review
+    
+    # Создаем клавиатуру с кнопкой персонализации
+    keyboard = [
+        [
+            InlineKeyboardButton("✏️ Отредактировать отзыв", callback_data="edit_review"),
+            InlineKeyboardButton("👤 Персонализировать", callback_data="personalize_review"),
+            InlineKeyboardButton("✅ Отправить в WhatsApp", callback_data="send_whatsapp"),
+        ],
+        [InlineKeyboardButton("🔄 Начать заново", callback_data="restart")],
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    query.edit_message_text(
+        text=f"🔄 Восстановлен исходный отзыв:\n\n\"{original_review}\"",
+        reply_markup=reply_markup
+    )
+    return CONFIRM_REVIEW
+
 # --- Обработчик выбора демографии ---
 def demographic_choice_handler(update: Update, context: CallbackContext) -> int:
     query = update.callback_query
@@ -392,7 +421,7 @@ def demographic_choice_handler(update: Update, context: CallbackContext) -> int:
     
     try:
         response = openai.ChatCompletion.create(
-            model="gpt-4o",
+            model="gpt-4o-mini",
             messages=[
                 {"role": "system", "content": f"Ты эксперт по созданию реалистичных отзывов от лица разных типов клиентов."},
                 {"role": "user", "content": personalize_prompt},
@@ -403,13 +432,16 @@ def demographic_choice_handler(update: Update, context: CallbackContext) -> int:
         personalized_review = response.choices[0].message.content.strip()
         context.user_data["generated_review"] = personalized_review
         
-        # Клавиатура без кнопки "Персонализировать"
+        # Клавиатура с кнопкой восстановления исходного отзыва
         keyboard = [
             [
                 InlineKeyboardButton("✏️ Отредактировать отзыв", callback_data="edit_review"),
                 InlineKeyboardButton("✅ Отправить в WhatsApp", callback_data="send_whatsapp"),
             ],
-            [InlineKeyboardButton("🔄 Начать заново", callback_data="restart")],
+            [
+                InlineKeyboardButton("🔙 Восстановить исходный", callback_data="restore_original"),
+                InlineKeyboardButton("🔄 Начать заново", callback_data="restart"),
+            ],
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
         
@@ -486,7 +518,7 @@ def humanize_review_handler(update: Update, context: CallbackContext) -> int:
     
     try:
         response = openai.ChatCompletion.create(
-            model="gpt-4o",
+            model="gpt-4o-mini",
             messages=[
                 {"role": "system", "content": "Ты помогаешь сделать отзыв клиента более коротким, естественным и человечным."},
                 {"role": "user", "content": humanize_prompt.format(review=review)},
@@ -598,6 +630,10 @@ def main():
                 CallbackQueryHandler(
                     humanize_review_handler, 
                     pattern="^humanize_review$"
+                ),
+                CallbackQueryHandler(
+                    restore_original_review_handler, 
+                    pattern="^restore_original$"
                 ),
             ],
             EDIT_REVIEW_STATE: [
