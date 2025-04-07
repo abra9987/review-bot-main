@@ -23,7 +23,7 @@ TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
 # Определяем состояния диалога
-START_MENU, QUESTION, CONFIRM_REVIEW, EDIT_REVIEW_STATE = range(4)
+START_MENU, QUESTION, CONFIRM_REVIEW, EDIT_REVIEW_STATE, HUMANIZE_PROCESSING = range(5)
 
 # Настройка OpenAI API
 openai.api_key = OPENAI_API_KEY
@@ -173,9 +173,10 @@ def question_callback_handler(update: Update, context: CallbackContext) -> int:
             keyboard = [
                 [
                     InlineKeyboardButton("✏️ Отредактировать отзыв", callback_data="edit_review"),
+                    InlineKeyboardButton("👤 Очеловечить", callback_data="humanize_review"),
                     InlineKeyboardButton("✅ Отправить в WhatsApp", callback_data="send_whatsapp"),
-                    InlineKeyboardButton("🔄 Начать заново", callback_data="restart"),
-                ]
+                ],
+                [InlineKeyboardButton("🔄 Начать заново", callback_data="restart")],
             ]
             reply_markup = InlineKeyboardMarkup(keyboard)
             query.edit_message_text(
@@ -235,9 +236,10 @@ def review_callback_handler(update: Update, context: CallbackContext) -> int:
         keyboard = [
             [
                 InlineKeyboardButton("✏️ Отредактировать отзыв", callback_data="edit_review"),
+                InlineKeyboardButton("👤 Очеловечить", callback_data="humanize_review"),
                 InlineKeyboardButton("✅ Отправить в WhatsApp", callback_data="send_whatsapp"),
-                InlineKeyboardButton("🔄 Начать заново", callback_data="restart"),
-            ]
+            ],
+            [InlineKeyboardButton("🔄 Начать заново", callback_data="restart")],
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
         query.edit_message_text(
@@ -260,6 +262,87 @@ def review_callback_handler(update: Update, context: CallbackContext) -> int:
         query.edit_message_text(text="📌 Выберите действие:", reply_markup=reply_markup)
         return START_MENU
 
+# --- Обработчик очеловечивания отзыва ---
+def humanize_review_handler(update: Update, context: CallbackContext) -> int:
+    query = update.callback_query
+    query.answer()
+    
+    review = context.user_data.get("generated_review", "")
+    
+    query.edit_message_text(text="Очеловечиваю отзыв, подождите...")
+    
+    # Промпт для "очеловечивания" отзыва
+    humanize_prompt = """
+    Ты эксперт по созданию естественных, искренних отзывов клиентов. 
+    Твоя задача — переписать предоставленный отзыв так, чтобы он звучал как настоящий отзыв довольного клиента.
+
+    Используй:
+    - разговорную речь и естественные конструкции предложений
+    - персональные детали и эмоции (радость, благодарность, приятное удивление)
+    - конкретные упоминания положительного опыта
+    - небольшие несовершенства в грамматике, если это делает текст более естественным
+    - варьирующую длину предложений
+    - уместные разговорные фразы и восклицания
+
+    Избегай:
+    - шаблонных фраз
+    - слишком формального языка
+    - неестественного потока мыслей
+    - излишне восторженных прилагательных
+    - повторений одних и тех же конструкций
+    - очевидной рекламной лексики
+
+    Вот отзыв, который нужно сделать более естественным и человечным:
+    "{review}"
+
+    Создай новую, более естественную версию этого отзыва.
+    """
+    
+    try:
+        response = openai.ChatCompletion.create(
+            model="gpt-4o",
+            messages=[
+                {"role": "system", "content": "Ты помогаешь сделать отзыв клиента более естественным и человечным."},
+                {"role": "user", "content": humanize_prompt.format(review=review)},
+            ],
+            temperature=0.8,
+            max_tokens=300,
+        )
+        humanized_review = response.choices[0].message.content.strip()
+        context.user_data["generated_review"] = humanized_review
+        
+        # Клавиатура без кнопки "Очеловечить"
+        keyboard = [
+            [
+                InlineKeyboardButton("✏️ Отредактировать отзыв", callback_data="edit_review"),
+                InlineKeyboardButton("✅ Отправить в WhatsApp", callback_data="send_whatsapp"),
+            ],
+            [InlineKeyboardButton("🔄 Начать заново", callback_data="restart")],
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        query.edit_message_text(
+            text=f"🎉 Отзыв очеловечен:\n\"{humanized_review}\"", reply_markup=reply_markup
+        )
+        return CONFIRM_REVIEW
+    except Exception as e:
+        logger.error(f"Ошибка OpenAI API при очеловечивании: {e}")
+        
+        # В случае ошибки возвращаем исходную клавиатуру
+        keyboard = [
+            [
+                InlineKeyboardButton("✏️ Отредактировать отзыв", callback_data="edit_review"),
+                InlineKeyboardButton("👤 Очеловечить", callback_data="humanize_review"),
+                InlineKeyboardButton("✅ Отправить в WhatsApp", callback_data="send_whatsapp"),
+            ],
+            [InlineKeyboardButton("🔄 Начать заново", callback_data="restart")],
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        query.edit_message_text(
+            text=f"❌ Ошибка при очеловечивании отзыва. Попробуйте еще раз.\n\nВаш отзыв:\n\"{review}\"",
+            reply_markup=reply_markup
+        )
+        return CONFIRM_REVIEW
+
 # --- Обработчик редактирования отзыва ---
 def edit_review_handler(update: Update, context: CallbackContext) -> int:
     edited_review = update.message.text
@@ -268,9 +351,10 @@ def edit_review_handler(update: Update, context: CallbackContext) -> int:
     keyboard = [
         [
             InlineKeyboardButton("✏️ Отредактировать отзыв", callback_data="edit_review"),
+            InlineKeyboardButton("👤 Очеловечить", callback_data="humanize_review"),
             InlineKeyboardButton("✅ Отправить в WhatsApp", callback_data="send_whatsapp"),
-            InlineKeyboardButton("🔄 Начать заново", callback_data="restart"),
-        ]
+        ],
+        [InlineKeyboardButton("🔄 Начать заново", callback_data="restart")],
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     update.message.reply_text(
@@ -286,9 +370,10 @@ def cancel_edit_handler(update: Update, context: CallbackContext) -> int:
     keyboard = [
         [
             InlineKeyboardButton("✏️ Отредактировать отзыв", callback_data="edit_review"),
+            InlineKeyboardButton("👤 Очеловечить", callback_data="humanize_review"),
             InlineKeyboardButton("✅ Отправить в WhatsApp", callback_data="send_whatsapp"),
-            InlineKeyboardButton("🔄 Начать заново", callback_data="restart"),
-        ]
+        ],
+        [InlineKeyboardButton("🔄 Начать заново", callback_data="restart")],
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     query.edit_message_text(
@@ -317,7 +402,12 @@ def main():
             ],
             CONFIRM_REVIEW: [
                 CallbackQueryHandler(
-                    review_callback_handler, pattern="^(edit_review|send_whatsapp|back_from_whatsapp|restart)$"
+                    review_callback_handler, 
+                    pattern="^(edit_review|send_whatsapp|back_from_whatsapp|restart)$"
+                ),
+                CallbackQueryHandler(
+                    humanize_review_handler, 
+                    pattern="^humanize_review$"
                 ),
             ],
             EDIT_REVIEW_STATE: [
