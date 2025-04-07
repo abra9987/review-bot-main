@@ -189,7 +189,7 @@ def question_callback_handler(update: Update, context: CallbackContext) -> int:
             
             try:
                 response = openai.ChatCompletion.create(
-                    model="gpt-4o-mini",
+                    model="gpt-4o",
                     messages=[
                         {"role": "system", "content": "Ты помогаешь составить отзыв для клиники."},
                         {"role": "user", "content": prompt},
@@ -421,7 +421,7 @@ def demographic_choice_handler(update: Update, context: CallbackContext) -> int:
     
     try:
         response = openai.ChatCompletion.create(
-            model="gpt-4o-mini",
+            model="gpt-4o",
             messages=[
                 {"role": "system", "content": f"Ты эксперт по созданию реалистичных отзывов от лица разных типов клиентов."},
                 {"role": "user", "content": personalize_prompt},
@@ -518,7 +518,7 @@ def humanize_review_handler(update: Update, context: CallbackContext) -> int:
     
     try:
         response = openai.ChatCompletion.create(
-            model="gpt-4o-mini",
+            model="gpt-4o",
             messages=[
                 {"role": "system", "content": "Ты помогаешь сделать отзыв клиента более коротким, естественным и человечным."},
                 {"role": "user", "content": humanize_prompt.format(review=review)},
